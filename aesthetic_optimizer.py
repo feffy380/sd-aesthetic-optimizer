@@ -44,7 +44,15 @@ def get_best_image(resp_json, models, model_weights):
     }
 
 
-def main(url, config, outdir):
+def encode_pil_to_base64(pil_image):
+    with io.BytesIO() as output_bytes:
+        pil_image.save(output_bytes, "PNG")
+        bytes_data = output_bytes.getvalue()
+    base64_str = str(base64.b64encode(bytes_data), "utf-8")
+    return f"data:image/png;base64,{base64_str}"
+
+
+def main(url, config, outdir, init_image=None):
     # TODO: make configurable
     model_paths = [
         "aesthetic_predictor/models/e621-l14-rhoLoss.ckpt",
@@ -61,10 +69,19 @@ def main(url, config, outdir):
     requests.post(url=f"{url}/sdapi/v1/options", json=config["options"])
 
     best = None
+    if init_image is not None:
+        embeds = models[0].get_embeds([init_image])
+        scores = [sigmoid(np.array(model.predict(embeds=embeds))) for model in models]
+        scores = [np.prod(np.array(s) ** model_weights) for s in zip(*scores)]
+        best = {
+            "image": init_image,
+            "image_b64": encode_pil_to_base64(init_image),
+            "score": scores[0],
+        }
 
     p = 0
     print("Starting txt2img seed search")
-    while p < config["seed_search_patience"]:
+    while init_image is None and p < config["seed_search_patience"]:
         response = requests.post(
             url=f"{url}/sdapi/v1/txt2img", json=config["parameters"]
         )
@@ -171,9 +188,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--url", type=str, help="URL for A1111 WebUI", default="http://localhost:7860"
     )
+    parser.add_argument(
+        "--init_image", type=str, help="use starting image instead of performing random seed search"
+    )
     args = parser.parse_args()
 
     with open(args.config, "rt") as f:
         config = json.load(f)
 
-    main(args.url, config, args.outdir)
+    init_image = None
+    if args.init_image is not None:
+        init_image = Image.open(Path(args.init_image).expanduser())
+
+    main(args.url, config, args.outdir, init_image)
