@@ -61,11 +61,10 @@ def main(url, config, outdir):
     requests.post(url=f"{url}/sdapi/v1/options", json=config["options"])
 
     best = None
-    patience = 10
-    p = 0
 
+    p = 0
     print("Starting txt2img seed search")
-    while p < patience:
+    while p < config["seed_search_patience"]:
         response = requests.post(
             url=f"{url}/sdapi/v1/txt2img", json=config["parameters"]
         )
@@ -78,7 +77,6 @@ def main(url, config, outdir):
         if best is not None and batch_best["score"] <= best["score"]:
             p += 1
             continue
-        p = 0
         best = batch_best
         # save new best
         filename = f"{best['job_timestamp']}-{best['seed']}.png"
@@ -95,7 +93,7 @@ def main(url, config, outdir):
     huge_step_interval = 8
     step_min = 0.0
     print(f"Starting img2img random search with denoising strength {step_size}")
-    while p < patience:
+    while p < config["img2img_patience"]:
         params["init_images"] = [best["image_b64"]]
 
         # small step
@@ -143,7 +141,7 @@ def main(url, config, outdir):
             filename = f"{best['job_timestamp']}-{best['seed']}.png"
             best["image"].save(outdir / filename, pnginfo=best["metadata"])
         # do we need to reduce step size?
-        if i2 >= patience:
+        if i2 >= config["img2img_patience"]:
             step_size -= step_inc
             print(f"Reduced denoising strength to {step_size}")
             i2 = 0

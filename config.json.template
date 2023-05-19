@@ -1,4 +1,6 @@
 {
+    "seed_search_patience": 64,
+    "img2img_patience": 16,
     "options": {
         "sd_model_checkpoint": "",
         "sd_vae": "Automatic",
