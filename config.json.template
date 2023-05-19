@@ -1,0 +1,17 @@
+{
+    "options": {
+        "sd_model_checkpoint": "",
+        "sd_vae": "Automatic",
+        "CLIP_stop_at_last_layers": 1
+    },
+    "parameters": {
+        "prompt": "",
+        "negative_prompt": "",
+        "steps": 15,
+        "sampler_name": "Euler a",
+        "width": 512,
+        "height": 512,
+        "cfg_scale": 7,
+        "batch_size": 1
+    }
+}

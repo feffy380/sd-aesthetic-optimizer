@@ -1,0 +1,3 @@
+[submodule "aesthetic_predictor"]
+	path = aesthetic_predictor
+	url = https://github.com/feffy380/improved-aesthetic-predictor
