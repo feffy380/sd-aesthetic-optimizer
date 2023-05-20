@@ -80,7 +80,8 @@ def main(url, config, outdir, init_image=None):
         }
 
     p = 0
-    print("Starting txt2img seed search")
+    if init_image is None:
+        print("Starting txt2img seed search")
     while init_image is None and p < config["seed_search_patience"]:
         response = requests.post(
             url=f"{url}/sdapi/v1/txt2img", json=config["parameters"]
