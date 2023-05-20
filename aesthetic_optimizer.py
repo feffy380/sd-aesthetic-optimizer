@@ -59,7 +59,7 @@ def main(url, config, outdir, init_image=None):
         "aesthetic_predictor/models/e621a-l14-rhoLoss.ckpt",
         "aesthetic_predictor/models/starboard_cursed-l14-rhoLoss.ckpt",
     ]
-    model_weights = [0.5, 0.5, 1]
+    model_weights = [1, 1, 1]
     models = [AestheticPredictor(model_path=path) for path in model_paths]
 
     # create output directory if it doesn't exist
@@ -110,7 +110,7 @@ def main(url, config, outdir, init_image=None):
     denoise_step = 0.1
     denoise_step_huge = denoise_step * 4
     denoise_step_huge_freq = 8  # regularly do a batch with much higher denoising strength
-    denoise_min = 0.0
+    denoise_min = 0.1
     print(f"Starting img2img random search with denoising strength {denoising_strength}")
     while p < config["img2img_patience"]:
         params["init_images"] = [best["image_b64"]]
