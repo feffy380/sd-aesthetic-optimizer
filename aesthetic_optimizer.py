@@ -52,6 +52,10 @@ def encode_pil_to_base64(pil_image):
     return f"data:image/png;base64,{base64_str}"
 
 
+def format_decimal(num):
+    return f"{num:.2f}"
+
+
 def main(url, config, outdir, init_image=None):
     # TODO: make configurable
     model_paths = [
@@ -117,7 +121,7 @@ def main(url, config, outdir, init_image=None):
         params["init_images"] = [best["image_b64"]]
 
         # small step
-        params["denoising_strength"] = denoising_strength
+        params["denoising_strength"] = format_decimal(denoising_strength)
         response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
         if response.status_code // 100 != 2:
             print("Request failed:", response.status_code)
@@ -132,7 +136,7 @@ def main(url, config, outdir, init_image=None):
             denoise_strength_big = denoising_strength + denoise_step_huge
             i1 = 0
         denoise_strength_big = min(1.0, denoise_strength_big)
-        params["denoising_strength"] = denoise_strength_big
+        params["denoising_strength"] = format_decimal(denoise_strength_big)
         response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
         if response.status_code // 100 != 2:
             print("Request failed:", response.status_code)
