@@ -92,7 +92,7 @@ def main(url, config, outdir, init_image=None):
         r = response.json()
         batch_best = get_best_image(r, models, model_weights)
         if best is not None and batch_best["score"] <= best["score"]:
-            p += 1
+            p += len(r["images"])
             continue
         best = batch_best
         # save new best
@@ -104,17 +104,18 @@ def main(url, config, outdir, init_image=None):
     i1 = 0
     i2 = 0
     params = config["parameters"].copy()
-    step_size = 0.75
-    step_inc = 0.1
-    step_inc_huge = step_inc * 4
-    huge_step_interval = 8
-    step_min = 0.0
-    print(f"Starting img2img random search with denoising strength {step_size}")
+    # TODO: make these configurable
+    denoising_strength = 0.75
+    denoise_step = 0.1
+    denoise_step_huge = denoise_step * 4
+    denoise_step_huge_freq = 8  # regularly do a batch with much higher denoising strength
+    denoise_min = 0.0
+    print(f"Starting img2img random search with denoising strength {denoising_strength}")
     while p < config["img2img_patience"]:
         params["init_images"] = [best["image_b64"]]
 
         # small step
-        params["denoising_strength"] = step_size
+        params["denoising_strength"] = denoising_strength
         response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
         if response.status_code // 100 != 2:
             print("Request failed:", response.status_code)
@@ -124,23 +125,25 @@ def main(url, config, outdir, init_image=None):
         small_step = get_best_image(r, models, model_weights)
 
         # large step
-        big_step_size = step_size + step_inc
-        if i1 % huge_step_interval == 0:
-            big_step_size = step_size + step_inc_huge
-        big_step_size = min(1.0, big_step_size)
-        params["denoising_strength"] = big_step_size
+        denoise_strength_big = denoising_strength + denoise_step
+        if i1 >= denoise_step_huge_freq:
+            denoise_strength_big = denoising_strength + denoise_step_huge
+            i1 = 0
+        denoise_strength_big = min(1.0, denoise_strength_big)
+        params["denoising_strength"] = denoise_strength_big
         response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
         if response.status_code // 100 != 2:
             print("Request failed:", response.status_code)
             p += 1
             continue
+        p = 0
         r = response.json()
         large_step = get_best_image(r, models, model_weights)
 
         # check for improvement
         new_best = True
         if max(small_step["score"], large_step["score"]) <= best["score"]:
-            i2 += 1
+            i2 += len(r["images"])
             new_best = False
         elif small_step["score"] > large_step["score"]:
             best = small_step
@@ -149,9 +152,9 @@ def main(url, config, outdir, init_image=None):
         else:
             best = large_step
             print("New best:", best["score"])
-            if big_step_size > step_size:
-                print(f"Increased denoising strength to {big_step_size}")
-            step_size = big_step_size
+            if denoise_strength_big > denoising_strength:
+                print(f"Increased denoising strength to {denoise_strength_big}")
+            denoising_strength = denoise_strength_big
             i2 = 0
         # save new best
         if new_best:
@@ -159,13 +162,13 @@ def main(url, config, outdir, init_image=None):
             best["image"].save(outdir / filename, pnginfo=best["metadata"])
         # do we need to reduce step size?
         if i2 >= config["img2img_patience"]:
-            step_size -= step_inc
-            print(f"Reduced denoising strength to {step_size}")
+            denoising_strength -= denoise_step
+            print(f"Reduced denoising strength to {denoising_strength}")
             i2 = 0
         # stop when step_size gets too low
-        if step_size <= step_min:
+        if denoising_strength <= denoise_min:
             break
-        i1 += 1
+        i1 += len(r["images"])
 
 
 if __name__ == "__main__":
