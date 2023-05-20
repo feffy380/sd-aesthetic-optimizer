@@ -78,10 +78,11 @@ def main(url, config, outdir, init_image=None):
             "image_b64": encode_pil_to_base64(init_image),
             "score": scores[0],
         }
+        print("Init image score:", best["score"])
+    else:
+        print("Starting txt2img seed search")
 
     p = 0
-    if init_image is None:
-        print("Starting txt2img seed search")
     while init_image is None and p < config["seed_search_patience"]:
         response = requests.post(
             url=f"{url}/sdapi/v1/txt2img", json=config["parameters"]
