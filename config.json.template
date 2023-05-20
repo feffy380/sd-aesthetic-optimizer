@@ -2,6 +2,7 @@
     "seed_search_patience": 64,
     "img2img_patience": 16,
     "initial_denoising_strength": 0.75,
+    "initial_inpaint_denoising_strength": 0.5,
     "options": {
         "sd_model_checkpoint": "",
         "sd_vae": "Automatic",

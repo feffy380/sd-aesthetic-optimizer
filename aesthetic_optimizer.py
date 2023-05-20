@@ -2,11 +2,13 @@ import argparse
 import base64
 import io
 import json
+import math
+import random
 from pathlib import Path
 
 import numpy as np
 import requests
-from PIL import Image, PngImagePlugin
+from PIL import Image, ImageDraw, PngImagePlugin
 from transformers import logging
 
 from aesthetic_predictor.aesthetic_predictor import AestheticPredictor
@@ -56,14 +58,46 @@ def format_decimal(num):
     return f"{num:.2f}"
 
 
-def main(url, config, outdir, init_image=None):
+def generate_patches(image, patch_size, overlap=None):
+    if overlap is None:
+        overlap = math.ceil(patch_size / 2)
+    width, height = image.size
+    patches = []
+    for y in range(
+        0,
+        math.ceil(height / patch_size) * patch_size - patch_size + 1,
+        patch_size - overlap,
+    ):
+        for x in range(
+            0,
+            math.ceil(width / patch_size) * patch_size - patch_size + 1,
+            patch_size - overlap,
+        ):
+            patch = (x, y, x + patch_size, y + patch_size)
+            patches.append(patch)
+    return patches
+
+
+def create_mask(image, patch_set):
+    mask = Image.new("L", image.size, 0)
+    draw = ImageDraw.Draw(mask)
+    for patch in patch_set:
+        draw.rectangle(patch, fill=255)
+    return mask
+
+
+def main(url, config, outdir, init_image=None, inpaint_only=False):
+    if init_image is None and inpaint_only:
+        raise ValueError("--inpaint_only requires an input image via --init_image")
+
+    # TODO: can probably refactor each phase into a function
     # TODO: make configurable
     model_paths = [
         "aesthetic_predictor/models/e621-l14-rhoLoss.ckpt",
         "aesthetic_predictor/models/e621a-l14-rhoLoss.ckpt",
         "aesthetic_predictor/models/starboard_cursed-l14-rhoLoss.ckpt",
     ]
-    model_weights = [1, 1, 1]
+    model_weights = [0.5, 0.5, 1]
     models = [AestheticPredictor(model_path=path) for path in model_paths]
 
     # create output directory if it doesn't exist
@@ -86,6 +120,7 @@ def main(url, config, outdir, init_image=None):
     else:
         print("Starting txt2img seed search")
 
+    # txt2img seed search
     p = 0
     while init_image is None and p < config["seed_search_patience"]:
         response = requests.post(
@@ -106,18 +141,27 @@ def main(url, config, outdir, init_image=None):
         best["image"].save(outdir / filename, pnginfo=best["metadata"])
         print("New best:", best["score"])
 
+    # img2img refinement
+    # TODO: simplify to reduce strength on plateau?
+    # experiments show higher strength is more likely to reduce score than improve it
     p = 0
     i1 = 0
     i2 = 0
     params = config["parameters"].copy()
-    # TODO: make these configurable
     denoising_strength = config.get("initial_denoising_strength", 0.75)
+    # TODO: make these configurable
     denoise_step = 0.1
     denoise_step_huge = denoise_step * 4
-    denoise_step_huge_freq = 8  # regularly do a batch with much higher denoising strength
+    denoise_step_huge_freq = (
+        8  # regularly do a batch with much higher denoising strength
+    )
     denoise_min = 0.1
-    print(f"Starting img2img random search with denoising strength {denoising_strength}")
-    while p < config["img2img_patience"]:
+    if not inpaint_only:
+        print(
+            "Starting img2img random search with denoising strength"
+            f" {denoising_strength}"
+        )
+    while (not inpaint_only) and p < config["img2img_patience"]:
         params["init_images"] = [best["image_b64"]]
 
         # small step
@@ -176,6 +220,57 @@ def main(url, config, outdir, init_image=None):
             break
         i1 += len(r["images"])
 
+    # inpainting refinement
+    patch_ratio = 5
+    patch_size = math.ceil(
+        min(best["image"].size[0], best["image"].size[1]) / patch_ratio
+    )
+    patches = generate_patches(best["image"], patch_size)
+    # TODO: smarter patch selection
+    params = config["parameters"].copy()
+    params["mask_blur"] = patch_size // 10
+    params["inpainting_fill"] = 1  # original
+    params["inpaint_full_res"] = False  # whole image, not just masked region
+    denoising_strength = config.get("initial_inpaint_denoising_strength", 0.5)
+    denoise_min = 0.1
+    denoise_step = 0.1
+    p = 0
+    print(f"Inpainting with denoising strength {denoising_strength}")
+    print(f"Created {len(patches)} image patches")
+    while denoising_strength >= denoise_min:
+        if p >= len(patches) / 2:  # TODO: threshold is arbitrary
+            denoising_strength -= denoise_step
+            print(f"Reduced denoising strength to {denoising_strength}")
+            p = 0
+            continue
+
+        params["init_images"] = [best["image_b64"]]
+        params["denoising_strength"] = format_decimal(denoising_strength)
+
+        # TODO: vary number of patches over time
+        num_patches = 1
+        patch_set = random.choices(patches, k=num_patches)
+        mask = create_mask(best["image"], patch_set)
+        params["mask"] = encode_pil_to_base64(mask)
+
+        response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
+        if response.status_code // 100 != 2:
+            print("Request failed:", response.status_code)
+            p += 1
+            continue
+        r = response.json()
+
+        batch_best = get_best_image(r, models, model_weights)
+        if batch_best["score"] <= best["score"]:
+            p += len(r["images"])
+            continue
+        p = 0
+        best = batch_best
+        print("New best:", best["score"])
+        # save new best
+        filename = f"{best['job_timestamp']}-{best['seed']}.png"
+        best["image"].save(outdir / filename, pnginfo=best["metadata"])
+
 
 if __name__ == "__main__":
     # parse command line arguments
@@ -198,7 +293,13 @@ if __name__ == "__main__":
         "--url", type=str, help="URL for A1111 WebUI", default="http://localhost:7860"
     )
     parser.add_argument(
-        "--init_image", type=str, help="use starting image instead of performing random seed search"
+        "--init_image",
+        type=str,
+        help="use starting image instead of performing random seed search",
+    )
+    parser.add_argument(
+        "--inpaint_only",
+        action=argparse.BooleanOptionalAction,
     )
     args = parser.parse_args()
 
@@ -209,4 +310,4 @@ if __name__ == "__main__":
     if args.init_image is not None:
         init_image = Image.open(Path(args.init_image).expanduser())
 
-    main(args.url, config, args.outdir, init_image)
+    main(args.url, config, args.outdir, init_image, args.inpaint_only)
