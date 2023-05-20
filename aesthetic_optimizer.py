@@ -106,7 +106,7 @@ def main(url, config, outdir, init_image=None):
     i2 = 0
     params = config["parameters"].copy()
     # TODO: make these configurable
-    denoising_strength = 0.75
+    denoising_strength = config.get("initial_denoising_strength", 0.75)
     denoise_step = 0.1
     denoise_step_huge = denoise_step * 4
     denoise_step_huge_freq = 8  # regularly do a batch with much higher denoising strength
