@@ -157,7 +157,7 @@ def inpainting_stage(url, config, models, model_weights, outdir, best):
     patches = generate_patches(best["image"], patch_size)
     # TODO: smarter patch selection
     params = config["parameters"].copy()
-    params["mask_blur"] = patch_size // 10
+    params["mask_blur"] = int(patch_size * 0.2)
     params["inpainting_fill"] = 1  # original
     params["inpaint_full_res"] = False  # whole image, not just masked region
     denoising_strength = config.get("initial_inpaint_denoising_strength", 0.5)
