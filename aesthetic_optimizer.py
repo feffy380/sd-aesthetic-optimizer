@@ -103,7 +103,6 @@ def txt2img_stage(url, config, models, model_weights, outdir):
         if best is not None and batch_best["score"] <= best["score"]:
             p += len(r["images"])
             continue
-        p = 0
         best = batch_best
         # save new best
         filename = f"{best['job_timestamp']}-{best['seed']}.png"
