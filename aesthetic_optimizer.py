@@ -86,11 +86,124 @@ def create_mask(image, patch_set):
     return mask
 
 
-def main(url, config, outdir, init_image=None, inpaint_only=False):
-    if init_image is None and inpaint_only:
-        raise ValueError("--inpaint_only requires an input image via --init_image")
+def txt2img_stage(url, config, models, model_weights, outdir):
+    best = None
+    p = 0
+    print("Starting txt2img seed search")
+    while p < config.get("seed_search_patience", 64):
+        response = requests.post(
+            url=f"{url}/sdapi/v1/txt2img", json=config["parameters"]
+        )
+        if response.status_code // 100 != 2:
+            print("Request failed:", response.status_code)
+            p += 1
+            continue
+        r = response.json()
+        batch_best = get_best_image(r, models, model_weights)
+        if best is not None and batch_best["score"] <= best["score"]:
+            p += len(r["images"])
+            continue
+        p = 0
+        best = batch_best
+        # save new best
+        filename = f"{best['job_timestamp']}-{best['seed']}.png"
+        best["image"].save(outdir / filename, pnginfo=best["metadata"])
+        print("New best:", best["score"])
+    return best
 
-    # TODO: can probably refactor each phase into a function
+
+def img2img_stage(url, config, models, model_weights, outdir, best):
+    p = 0
+    params = config["parameters"].copy()
+    denoising_strength = config.get("initial_denoising_strength", 0.75)
+    # TODO: make these configurable
+    denoise_step = 0.1
+    denoise_min = 0.1
+    print(
+        f"Starting img2img random search with denoising strength {denoising_strength}"
+    )
+    while denoising_strength >= denoise_min:
+        if p >= config.get("img2img_patience", 16):
+            denoising_strength -= denoise_step
+            p = 0
+            print(f"Reduced denoising strength to {denoising_strength}")
+            continue
+
+        params["init_images"] = [best["image_b64"]]
+        params["denoising_strength"] = format_decimal(denoising_strength)
+        response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
+        if response.status_code // 100 != 2:
+            print("Request failed:", response.status_code)
+            p += 1
+            continue
+        r = response.json()
+        batch_best = get_best_image(r, models, model_weights)
+        if batch_best["score"] <= best["score"]:
+            p += len(r["images"])
+            continue
+        p = 0
+        best = batch_best
+        # save new best
+        filename = f"{best['job_timestamp']}-{best['seed']}.png"
+        best["image"].save(outdir / filename, pnginfo=best["metadata"])
+        print("New best:", best["score"])
+    return best
+
+
+def inpainting_stage(url, config, models, model_weights, outdir, best):
+    patch_ratio = 5
+    patch_size = math.ceil(
+        min(best["image"].size[0], best["image"].size[1]) / patch_ratio
+    )
+    patches = generate_patches(best["image"], patch_size)
+    # TODO: smarter patch selection
+    params = config["parameters"].copy()
+    params["mask_blur"] = patch_size // 10
+    params["inpainting_fill"] = 1  # original
+    params["inpaint_full_res"] = False  # whole image, not just masked region
+    denoising_strength = config.get("initial_inpaint_denoising_strength", 0.5)
+    denoise_min = 0.1
+    denoise_step = 0.1
+    p = 0
+    print(f"Inpainting with denoising strength {denoising_strength}")
+    print(f"Number of tiles: {len(patches)}")
+    while denoising_strength >= denoise_min:
+        if p >= len(patches) / 2:  # TODO: threshold is arbitrary
+            denoising_strength -= denoise_step
+            print(f"Reduced denoising strength to {denoising_strength}")
+            p = 0
+            continue
+
+        params["init_images"] = [best["image_b64"]]
+        params["denoising_strength"] = format_decimal(denoising_strength)
+
+        num_patches = 1
+        patch_set = random.choices(patches, k=num_patches)
+        mask = create_mask(best["image"], patch_set)
+        params["mask"] = encode_pil_to_base64(mask)
+
+        response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
+        if response.status_code // 100 != 2:
+            print("Request failed:", response.status_code)
+            p += 1
+            continue
+        r = response.json()
+        batch_best = get_best_image(r, models, model_weights)
+        if batch_best["score"] <= best["score"]:
+            p += len(r["images"])
+            continue
+        p = 0
+        best = batch_best
+        # save new best
+        filename = f"{best['job_timestamp']}-{best['seed']}.png"
+        best["image"].save(outdir / filename, pnginfo=best["metadata"])
+        print("New best:", best["score"])
+    return best
+
+
+def main(
+    url, config, outdir, init_image=None, skip_img2img=False, skip_inpainting=False
+):
     # TODO: make configurable
     model_paths = [
         "aesthetic_predictor/models/e621-l14-rhoLoss.ckpt",
@@ -117,159 +230,16 @@ def main(url, config, outdir, init_image=None, inpaint_only=False):
             "score": scores[0],
         }
         print("Init image score:", best["score"])
-    else:
-        print("Starting txt2img seed search")
 
     # txt2img seed search
-    p = 0
-    while init_image is None and p < config["seed_search_patience"]:
-        response = requests.post(
-            url=f"{url}/sdapi/v1/txt2img", json=config["parameters"]
-        )
-        if response.status_code // 100 != 2:
-            print("Request failed:", response.status_code)
-            p += 1
-            continue
-        r = response.json()
-        batch_best = get_best_image(r, models, model_weights)
-        if best is not None and batch_best["score"] <= best["score"]:
-            p += len(r["images"])
-            continue
-        best = batch_best
-        # save new best
-        filename = f"{best['job_timestamp']}-{best['seed']}.png"
-        best["image"].save(outdir / filename, pnginfo=best["metadata"])
-        print("New best:", best["score"])
-
+    if init_image is None:
+        best = txt2img_stage(url, config, models, model_weights, outdir)
     # img2img refinement
-    # TODO: simplify to reduce strength on plateau?
-    # experiments show higher strength is more likely to reduce score than improve it
-    p = 0
-    i1 = 0
-    i2 = 0
-    params = config["parameters"].copy()
-    denoising_strength = config.get("initial_denoising_strength", 0.75)
-    # TODO: make these configurable
-    denoise_step = 0.1
-    denoise_step_huge = denoise_step * 4
-    denoise_step_huge_freq = (
-        8  # regularly do a batch with much higher denoising strength
-    )
-    denoise_min = 0.1
-    if not inpaint_only:
-        print(
-            "Starting img2img random search with denoising strength"
-            f" {denoising_strength}"
-        )
-    while (not inpaint_only) and p < config["img2img_patience"]:
-        params["init_images"] = [best["image_b64"]]
-
-        # small step
-        params["denoising_strength"] = format_decimal(denoising_strength)
-        response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
-        if response.status_code // 100 != 2:
-            print("Request failed:", response.status_code)
-            p += 1
-            continue
-        r = response.json()
-        small_step = get_best_image(r, models, model_weights)
-
-        # large step
-        denoise_strength_big = denoising_strength + denoise_step
-        if i1 >= denoise_step_huge_freq:
-            denoise_strength_big = denoising_strength + denoise_step_huge
-            i1 = 0
-        denoise_strength_big = min(1.0, denoise_strength_big)
-        params["denoising_strength"] = format_decimal(denoise_strength_big)
-        response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
-        if response.status_code // 100 != 2:
-            print("Request failed:", response.status_code)
-            p += 1
-            continue
-        p = 0
-        r = response.json()
-        large_step = get_best_image(r, models, model_weights)
-
-        # check for improvement
-        new_best = True
-        if max(small_step["score"], large_step["score"]) <= best["score"]:
-            i2 += len(r["images"])
-            new_best = False
-        elif small_step["score"] > large_step["score"]:
-            best = small_step
-            print("New best:", best["score"])
-            i2 = 0
-        else:
-            best = large_step
-            print("New best:", best["score"])
-            if denoise_strength_big > denoising_strength:
-                print(f"Increased denoising strength to {denoise_strength_big}")
-            denoising_strength = denoise_strength_big
-            i2 = 0
-        # save new best
-        if new_best:
-            filename = f"{best['job_timestamp']}-{best['seed']}.png"
-            best["image"].save(outdir / filename, pnginfo=best["metadata"])
-        # do we need to reduce step size?
-        if i2 >= config["img2img_patience"]:
-            denoising_strength -= denoise_step
-            print(f"Reduced denoising strength to {denoising_strength}")
-            i2 = 0
-        # stop when step_size gets too low
-        if denoising_strength <= denoise_min:
-            break
-        i1 += len(r["images"])
-
+    if not skip_img2img:
+        best = img2img_stage(url, config, models, model_weights, outdir, best)
     # inpainting refinement
-    patch_ratio = 5
-    patch_size = math.ceil(
-        min(best["image"].size[0], best["image"].size[1]) / patch_ratio
-    )
-    patches = generate_patches(best["image"], patch_size)
-    # TODO: smarter patch selection
-    params = config["parameters"].copy()
-    params["mask_blur"] = patch_size // 10
-    params["inpainting_fill"] = 1  # original
-    params["inpaint_full_res"] = False  # whole image, not just masked region
-    denoising_strength = config.get("initial_inpaint_denoising_strength", 0.5)
-    denoise_min = 0.1
-    denoise_step = 0.1
-    p = 0
-    print(f"Inpainting with denoising strength {denoising_strength}")
-    print(f"Created {len(patches)} image patches")
-    while denoising_strength >= denoise_min:
-        if p >= len(patches) / 2:  # TODO: threshold is arbitrary
-            denoising_strength -= denoise_step
-            print(f"Reduced denoising strength to {denoising_strength}")
-            p = 0
-            continue
-
-        params["init_images"] = [best["image_b64"]]
-        params["denoising_strength"] = format_decimal(denoising_strength)
-
-        # TODO: vary number of patches over time
-        num_patches = 1
-        patch_set = random.choices(patches, k=num_patches)
-        mask = create_mask(best["image"], patch_set)
-        params["mask"] = encode_pil_to_base64(mask)
-
-        response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
-        if response.status_code // 100 != 2:
-            print("Request failed:", response.status_code)
-            p += 1
-            continue
-        r = response.json()
-
-        batch_best = get_best_image(r, models, model_weights)
-        if batch_best["score"] <= best["score"]:
-            p += len(r["images"])
-            continue
-        p = 0
-        best = batch_best
-        print("New best:", best["score"])
-        # save new best
-        filename = f"{best['job_timestamp']}-{best['seed']}.png"
-        best["image"].save(outdir / filename, pnginfo=best["metadata"])
+    best = inpainting_stage(url, config, models, model_weights, outdir, best)
+    return best
 
 
 if __name__ == "__main__":
@@ -295,11 +265,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--init_image",
         type=str,
-        help="use starting image instead of performing random seed search",
+        help="use starting image instead of performing random seed search. skips txt2img",
     )
     parser.add_argument(
-        "--inpaint_only",
+        "--skip_img2img",
         action=argparse.BooleanOptionalAction,
+        help="skip the img2img phase",
+    )
+    parser.add_argument(
+        "--skip_inpainting",
+        action=argparse.BooleanOptionalAction,
+        help="skip the inpainting phase",
     )
     args = parser.parse_args()
 
@@ -310,4 +286,4 @@ if __name__ == "__main__":
     if args.init_image is not None:
         init_image = Image.open(Path(args.init_image).expanduser())
 
-    main(args.url, config, args.outdir, init_image, args.inpaint_only)
+    main(args.url, config, args.outdir, init_image, args.skip_img2img, args.skip_inpainting)
