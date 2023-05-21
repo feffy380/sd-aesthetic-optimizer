@@ -202,7 +202,7 @@ def inpainting_stage(url, config, models, model_weights, outdir, best):
 
 
 def main(
-    url, config, outdir, init_image=None, skip_img2img=False, skip_inpainting=False
+    url, config, outdir, init_image=None, skip_img2img=False, skip_inpaint=False
 ):
     # TODO: make configurable
     model_paths = [
@@ -273,7 +273,7 @@ if __name__ == "__main__":
         help="skip the img2img phase",
     )
     parser.add_argument(
-        "--skip_inpainting",
+        "--skip_inpaint",
         action=argparse.BooleanOptionalAction,
         help="skip the inpainting phase",
     )
@@ -286,4 +286,4 @@ if __name__ == "__main__":
     if args.init_image is not None:
         init_image = Image.open(Path(args.init_image).expanduser())
 
-    main(args.url, config, args.outdir, init_image, args.skip_img2img, args.skip_inpainting)
+    main(args.url, config, args.outdir, init_image, args.skip_img2img, args.skip_inpaint)
