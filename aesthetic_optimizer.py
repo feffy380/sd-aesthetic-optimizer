@@ -150,12 +150,17 @@ def img2img_stage(url, config, models, model_weights, outdir, best):
 
 
 def inpainting_stage(url, config, models, model_weights, outdir, best):
-    patch_ratio = 5
-    patch_size = math.ceil(
-        min(best["image"].size[0], best["image"].size[1]) / patch_ratio
-    )
-    patches = generate_patches(best["image"], patch_size)
-    # TODO: smarter patch selection
+    # generate patches with different sizes
+    patch_ratios = (3, 5)
+    patch_sizes = [
+        math.ceil(min(best["image"].size) / patch_ratio) for patch_ratio in patch_ratios
+    ]
+    patches = []
+    for patch_size in patch_sizes:
+        patches.extend(generate_patches(best["image"], patch_size))
+    # weight patches by success rate
+    patch_stats = [[1, 1] for _ in patches]
+
     params = config["parameters"].copy()
     params["mask_blur"] = int(patch_size * 0.2)
     params["inpainting_fill"] = 1  # original
@@ -177,9 +182,16 @@ def inpainting_stage(url, config, models, model_weights, outdir, best):
         params["denoising_strength"] = format_decimal(denoising_strength)
 
         num_patches = 1
-        patch_set = random.choices(patches, k=num_patches)
+        patch_weights = [s[0] / s[1] for s in patch_stats]
+        patch_idxs = random.choices(
+            range(len(patches)), weights=patch_weights, k=num_patches
+        )
+        patch_set = [patches[idx] for idx in patch_idxs]
         mask = create_mask(best["image"], patch_set)
         params["mask"] = encode_pil_to_base64(mask)
+        # update patch stats: attempts
+        for idx in patch_idxs:
+            patch_stats[idx][1] += 1
 
         response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
         if response.status_code // 100 != 2:
@@ -193,6 +205,9 @@ def inpainting_stage(url, config, models, model_weights, outdir, best):
             continue
         p = 0
         best = batch_best
+        # update patch stats: successes
+        for idx in patch_idxs:
+            patch_stats[idx][0] += 1
         # save new best
         filename = f"{best['job_timestamp']}-{best['seed']}.png"
         best["image"].save(outdir / filename, pnginfo=best["metadata"])
@@ -200,9 +215,7 @@ def inpainting_stage(url, config, models, model_weights, outdir, best):
     return best
 
 
-def main(
-    url, config, outdir, init_image=None, skip_img2img=False, skip_inpaint=False
-):
+def main(url, config, outdir, init_image=None, skip_img2img=False, skip_inpaint=False):
     # TODO: epsilon threshold for resetting patience counters
     # TODO: random chance of accepting worse image ~10%?
 
@@ -262,7 +275,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--init_image",
         type=str,
-        help="use starting image instead of performing random seed search. skips txt2img",
+        help=(
+            "use starting image instead of performing random seed search. skips txt2img"
+        ),
     )
     parser.add_argument(
         "--skip_img2img",
@@ -283,4 +298,6 @@ if __name__ == "__main__":
     if args.init_image is not None:
         init_image = Image.open(Path(args.init_image).expanduser())
 
-    main(args.url, config, args.outdir, init_image, args.skip_img2img, args.skip_inpaint)
+    main(
+        args.url, config, args.outdir, init_image, args.skip_img2img, args.skip_inpaint
+    )
