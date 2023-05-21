@@ -204,13 +204,11 @@ def inpainting_stage(url, config, models, model_weights, outdir, best):
 def main(
     url, config, outdir, init_image=None, skip_img2img=False, skip_inpaint=False
 ):
-    # TODO: make configurable
-    model_paths = [
-        "aesthetic_predictor/models/e621-l14-rhoLoss.ckpt",
-        "aesthetic_predictor/models/e621a-l14-rhoLoss.ckpt",
-        "aesthetic_predictor/models/starboard_cursed-l14-rhoLoss.ckpt",
-    ]
-    model_weights = [0.5, 0.5, 1]
+    # TODO: epsilon threshold for resetting patience counters
+    # TODO: random chance of accepting worse image ~10%?
+
+    model_paths = [model["path"] for model in config["score_models"]]
+    model_weights = [model.get("weight", 1.0) for model in config["score_models"]]
     models = [AestheticPredictor(model_path=path) for path in model_paths]
 
     # create output directory if it doesn't exist
