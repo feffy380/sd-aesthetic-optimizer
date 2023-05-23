@@ -13,6 +13,11 @@ from transformers import logging
 
 from aesthetic_predictor.aesthetic_predictor import AestheticPredictor
 
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
 logging.set_verbosity_error()
 
 
@@ -263,8 +268,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        help="json file containing generation parameters",
-        default="config.json",
+        help="TOML file containing generation parameters",
+        default="config.toml",
     )
     parser.add_argument(
         "--outdir", type=str, help="directory to save images", default="outputs"
@@ -291,8 +296,14 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    with open(args.config, "rt") as f:
-        config = json.load(f)
+    if args.config.lower().endswith(".toml"):
+        with open(args.config, "rb") as f:
+            config = tomllib.load(f)
+    elif args.config.lower().endswith(".json"):
+        # deprecation notice
+        print("DEPRECATION NOTICE: JSON config support will be removed in a future version in favor of TOML files.")
+        with open(args.config, "rt") as f:
+            config = json.load(f)
 
     init_image = None
     if args.init_image is not None:
