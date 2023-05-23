@@ -6,7 +6,8 @@
     "score_models": [
         {"path": "aesthetic_predictor/models/e621-l14-rhoLoss.ckpt", "weight": 0.5},
         {"path": "aesthetic_predictor/models/e621a-l14-rhoLoss.ckpt", "weight": 0.5},
-        {"path": "aesthetic_predictor/models/starboard_cursed-l14-rhoLoss.ckpt", "weight": 1.0}
+        {"path": "aesthetic_predictor/models/starboard_cursed-l14-rhoLoss.ckpt", "weight": 1.0},
+        {"path": "aesthetic_predictor/models/real_vs_ai-l14-rhoLoss.ckpt", "weight": 1.0}
     ],
     "options": {
         "sd_model_checkpoint": "",
