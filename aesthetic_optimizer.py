@@ -220,7 +220,7 @@ def inpainting_stage(url, config, models, model_weights, outdir, best):
     return best
 
 
-def main(url, config, outdir, init_image=None, skip_img2img=False, skip_inpaint=False):
+def main(url, config, outdir, init_image=None, img2img=True, inpaint=True):
     # TODO: epsilon threshold for resetting patience counters
     # TODO: random chance of accepting worse image ~10%?
 
@@ -245,15 +245,17 @@ def main(url, config, outdir, init_image=None, skip_img2img=False, skip_inpaint=
             "score": scores[0],
         }
         print("Init image score:", best["score"])
-
     # txt2img seed search
-    if init_image is None:
+    else:
         best = txt2img_stage(url, config, models, model_weights, outdir)
+
     # img2img refinement
-    if not skip_img2img:
+    if img2img:
         best = img2img_stage(url, config, models, model_weights, outdir, best)
+
     # inpainting refinement
-    best = inpainting_stage(url, config, models, model_weights, outdir, best)
+    if inpaint:
+        best = inpainting_stage(url, config, models, model_weights, outdir, best)
     return best
 
 
@@ -278,30 +280,53 @@ if __name__ == "__main__":
         "--url", type=str, help="URL for A1111 WebUI", default="http://localhost:7860"
     )
     parser.add_argument(
-        "--init_image",
+        "--init-image",
         type=str,
-        help=(
-            "use starting image instead of performing random seed search. skips txt2img"
-        ),
+        help="use starting image. conflicts with --txt2img",
     )
     parser.add_argument(
-        "--skip_img2img",
+        "--txt2img",
         action=argparse.BooleanOptionalAction,
-        help="skip the img2img phase",
+        help="enable txt2img stage. conflicts with --init-image",
     )
     parser.add_argument(
-        "--skip_inpaint",
+        "--img2img",
         action=argparse.BooleanOptionalAction,
-        help="skip the inpainting phase",
+        help="enable img2img stage",
+    )
+    parser.add_argument(
+        "--inpaint",
+        action=argparse.BooleanOptionalAction,
+        help="enable inpainting stage",
     )
     args = parser.parse_args()
+
+    if args.txt2img and args.init_image is not None:
+        raise ValueError("Conflicting arguments: --init-image and --txt2img")
+    flags = [args.txt2img, args.img2img, args.inpaint]
+    # if a stage is explicitly enabled, set unspecified stages to disabled
+    if any(flags):
+        flags = [False if flag is None else flag for flag in flags]
+    # otherwise enable them
+    else:
+        flags = [True if flag is None else flag for flag in flags]
+    txt2img, img2img, inpaint = flags
+    # disable txt2img if init_image is provided
+    if args.init_image is not None:
+        txt2img = False
+    # validate flags
+    if not txt2img and args.init_image is None:
+        raise ValueError("Missing argument: expected --txt2img or --init-image")
 
     if args.config.lower().endswith(".toml"):
         with open(args.config, "rb") as f:
             config = tomllib.load(f)
     elif args.config.lower().endswith(".json"):
         # deprecation notice
-        print("DEPRECATION NOTICE: JSON config support will be removed in a future version in favor of TOML files.")
+        print(
+            "DEPRECATION NOTICE: JSON config support will be removed in a future"
+            " version in favor of TOML files."
+        )
         with open(args.config, "rt") as f:
             config = json.load(f)
 
@@ -309,6 +334,4 @@ if __name__ == "__main__":
     if args.init_image is not None:
         init_image = Image.open(Path(args.init_image).expanduser())
 
-    main(
-        args.url, config, args.outdir, init_image, args.skip_img2img, args.skip_inpaint
-    )
+    main(args.url, config, args.outdir, init_image, img2img, inpaint)
