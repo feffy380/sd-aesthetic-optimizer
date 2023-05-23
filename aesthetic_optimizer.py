@@ -194,9 +194,6 @@ def inpainting_stage(url, config, models, model_weights, outdir, best):
         patch_set = [patches[idx] for idx in patch_idxs]
         mask = create_mask(best["image"], patch_set)
         params["mask"] = encode_pil_to_base64(mask)
-        # update patch stats: attempts
-        for idx in patch_idxs:
-            patch_stats[idx][1] += 1
 
         response = requests.post(url=f"{url}/sdapi/v1/img2img", json=params)
         if response.status_code // 100 != 2:
@@ -205,14 +202,16 @@ def inpainting_stage(url, config, models, model_weights, outdir, best):
             continue
         r = response.json()
         batch_best = get_best_image(r, models, model_weights)
+        # update patch stats
+        for idx in patch_idxs:
+            # ratio to current best
+            patch_stats[idx][0] += batch_best["score"] / best["score"]
+            patch_stats[idx][1] += 1
         if batch_best["score"] <= best["score"]:
             p += len(r["images"])
             continue
         p = 0
         best = batch_best
-        # update patch stats: successes
-        for idx in patch_idxs:
-            patch_stats[idx][0] += 1
         # save new best
         filename = f"{best['job_timestamp']}-{best['seed']}.png"
         best["image"].save(outdir / filename, pnginfo=best["metadata"])
