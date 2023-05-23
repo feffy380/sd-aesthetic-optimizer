@@ -204,8 +204,8 @@ def inpainting_stage(url, config, models, model_weights, outdir, best):
         batch_best = get_best_image(r, models, model_weights)
         # update patch stats
         for idx in patch_idxs:
-            # ratio to current best
-            patch_stats[idx][0] += batch_best["score"] / best["score"]
+            # squared ratio to current best: punish lower scores more
+            patch_stats[idx][0] += (batch_best["score"] / best["score"])**2
             patch_stats[idx][1] += 1
         if batch_best["score"] <= best["score"]:
             p += len(r["images"])
